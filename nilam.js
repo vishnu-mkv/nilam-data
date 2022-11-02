@@ -303,11 +303,11 @@ function buildFarmer(farmer, index) {
     }
 
     // check if father name and name are alphabetic
-    if (!/^[a-zA-Z. ]+$/.test(farmer[1])) {
+    if (!/^[a-zA-Z ]+$/.test(farmer[1])) {
       throw new Error("Farmer name is not valid");
     }
 
-    if (!/^[a-zA-Z. ]+$/.test(farmer[2])) {
+    if (!/^[a-zA-Z ]+$/.test(farmer[2])) {
       throw new Error("Farmer father name is not valid");
     }
 
