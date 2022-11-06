@@ -38,6 +38,8 @@ for (let i = 2; i + 1 < val.length; i += 2) {
   }
 }
 
+console.log("\n\nNILAM BULK UPLOAD\n===========================\n");
+
 if (!BLOCK || !FILE_PATH || !DELAY) {
   console.log(
     "Please set the options '--block', '--file' are required. --delay is optional"
@@ -52,8 +54,8 @@ function getToken() {
     var schema = {
       properties: {
         password: {
-          hidden: true,
-          message: "Enter Access token: ",
+          // hidden: true,
+          message: "Enter Access token",
         },
       },
     };
@@ -74,6 +76,7 @@ function getToken() {
         reject();
       }
       ACCESS_TOKEN = result.password;
+      console.log("\n\n\n");
       resolve();
     });
   });
@@ -101,14 +104,6 @@ parser.on("readable", function () {
 });
 
 parser.on("end", async function () {
-  await getToken();
-
-  if (!ACCESS_TOKEN) {
-    console.log("Access token is required");
-    process.exit(0);
-  }
-
-  console.log("Waiting for all requests to complete");
   await makeCalls(records);
 
   console.log("Completed.");
@@ -120,7 +115,14 @@ parser.on("end", async function () {
     return;
   }
 
-  console.log("Writing errors to file");
+  writeError();
+  // process.exit(0);
+});
+
+function writeError() {
+  console.log(
+    "\n\n-----------------\nWriting errors to file\n-----------------\n"
+  );
   // write parse erros to csv file
   // parse error is of the form {index: {sno, name, fathername, mobilenumber, reason}}
 
@@ -128,7 +130,7 @@ parser.on("end", async function () {
     "Block - " +
     BLOCK +
     "\n\n" +
-    "S no,Name,Father Name,Mobile Number,Reason\n";
+    "S no,Name,Father / Husband Name,Mobile Number,Reason\n";
 
   parseErrorCsv =
     parseErrorCsv +
@@ -150,16 +152,15 @@ parser.on("end", async function () {
       })
       .join("\n");
 
-  fs.writeFileSync("." + BLOCK + "-errors.csv", parseErrorCsv);
+  fs.writeFileSync("./upload-out/" + BLOCK + "-errors.csv", parseErrorCsv);
 
-  console.log("./" + BLOCK + "-errors.csv");
-
-  // process.exit(0);
-});
+  console.log("./upload-out/" + BLOCK + "-errors.csv\n\n");
+}
 
 async function makeCalls(records, retrying = false) {
   await createAll([...records]);
 
+  console.log("\n\n-----------------\nSummary\n-----------------\n");
   console.log("Success", success);
   console.log("Failed", failed);
 
@@ -177,29 +178,74 @@ async function makeCalls(records, retrying = false) {
 
 function createAll(farmers) {
   let sender;
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     const promises = [];
     let i = 0;
 
+    const farmerBuilds = [];
+    console.log("\nBuilding farmers...");
+
+    for (let j = 0; j < farmers.length; j++) {
+      try {
+        let farmer = buildFarmer(farmers[j], j);
+        if (!farmer) continue;
+        farmerBuilds.push(farmer);
+      } catch (e) {
+        console.log("Error building farmer - " + j);
+        console.log("Farmer", farmers[j]);
+        console.log("Error", e);
+        console.log("Aborting upload.");
+        process.exit(0);
+      }
+    }
+
+    console.log("Complete.");
+    console.log("Parse Errors: ", Object.keys(parseErrors).length);
+
+    if (Object.keys(parseErrors).length > 0) {
+      writeError();
+    }
+
+    // if (Object.keys(parseErrors).length > 20) {
+    //   console.log("Too many parse errors. Aborting upload.");
+    //   resolve();
+    //   return;
+    // }
+
+    console.log(
+      farmerBuilds.length,
+      "built. \nBuild succeeded\n\nInitiating upload...\n-------------------------\n"
+    );
+
+    await getToken();
+
+    if (!ACCESS_TOKEN) {
+      console.log("Access token is required");
+      process.exit(0);
+    }
+
     sender = setInterval(() => {
-      if (farmers.length === i) {
+      if (farmerBuilds.length === i) {
         clearInterval(sender);
         resolve(Promise.all(promises));
         return;
       }
 
       try {
-        const data = farmers[i];
+        const data = farmerBuilds[i];
 
         try {
-          let farmer = buildFarmer(data, i);
           console.log("Posting farmer", i);
-          let promise = makeRequest(farmer, i);
+          let promise = makeRequest(data, i);
           promises.push(promise);
-        } catch (e) {}
+        } catch (e) {
+          console.log("Error", e, data);
+        }
 
         i++;
-      } catch (e) {}
+      } catch (e) {
+        console.log("Error", e, data);
+      }
     }, DELAY);
   });
 }
@@ -222,16 +268,14 @@ function makeRequest(farmer, index) {
 
         res.setEncoding("utf8");
         res.on("data", function (body) {
-          // console.log(body);
-          if (res.statusCode !== 403) {
+          if (res.body?.message === "Invalid user token") {
             console.log("Invalid access token or permission Denied");
             process.exit(0);
-          }
-          if (res.statusCode !== 200) {
+          } else if (res.statusCode !== 200) {
             failedIndexes[index] = {
               sno: index + 1,
               name: farmer.basicDetails.firstname.data,
-              fathername: farmer.basicDetails.fathername.data,
+              fathername: farmer.basicDetails.fatherorhusbandname.data,
               mobilenumber: farmer.basicDetails.mobilenumber.data,
               reason: body,
             };
@@ -241,25 +285,17 @@ function makeRequest(farmer, index) {
         });
       });
       req.on("error", function (e) {
-        failedIndexes[index] = {
-          sno: index + 1,
-          name: farmer.basicDetails.firstname.data,
-          fathername: farmer.basicDetails.fathername.data,
-          mobilenumber: farmer.basicDetails.mobilenumber.data,
-          reason: e.message,
-        };
-        failed++;
-        return resolve();
+        throw e;
       });
       req.write(JSON.stringify(farmer));
       req.end();
     } catch (e) {
       failedIndexes[index] = {
         sno: index + 1,
-        name: farmer.basicDetails.firstname.data,
-        fathername: farmer.basicDetails.fathername.data,
-        mobilenumber: farmer.basicDetails.mobilenumber.data,
-        reason: e.message,
+        name: farmer?.basicDetails?.firstname?.data,
+        fathername: farmer?.basicDetails?.fatherorhusbandname?.data,
+        mobilenumber: farmer?.basicDetails?.mobilenumber?.data,
+        reason: e?.message,
       };
       failed++;
       return resolve();
@@ -286,7 +322,7 @@ function buildFarmer(farmer, index) {
     }
 
     // if mobile number is not 10 digits throw error and if it is not a number throw error
-    if (farmer[4].length !== 10 || isNaN(farmer[4])) {
+    if (farmer[4].trim().length !== 10 || isNaN(farmer[4].trim())) {
       throw new Error("Mobile number is not valid - " + farmer[4]);
     }
 
@@ -297,31 +333,36 @@ function buildFarmer(farmer, index) {
       throw new Error("Farmer category is not valid - " + farmer[5]);
     }
 
+    // convert BC to GEN
+    if (farmer[6].toUpperCase().trim() === "BC") {
+      farmer[6] = "GEN";
+    }
+
     // if community is not SC, ST, MBC, GEN throw error
     if (!["SC", "ST", "MBC", "GEN"].includes(farmer[6].toUpperCase().trim())) {
       throw new Error("Farmer community is not valid");
     }
 
     // check if father name and name are alphabetic
-    if (!/^[a-zA-Z ]+$/.test(farmer[1])) {
+    if (!/^[a-zA-Z \.]+$/.test(farmer[1].trim())) {
       throw new Error("Farmer name is not valid");
     }
 
-    if (!/^[a-zA-Z ]+$/.test(farmer[2])) {
+    if (!/^[a-zA-Z \.]+$/.test(farmer[2].trim())) {
       throw new Error("Farmer father name is not valid");
     }
 
     // check if terrain area is of form 1.1 or 1
-    if (!/^(?:[0-9]+\.)*[0-9]$/.test(farmer[10])) {
+    if (!/^(?:[0-9]+\.)*[0-9]+$/.test(farmer[10].trim())) {
       throw new Error("Total extent area (Ha) is not valid - " + farmer[10]);
     }
 
-    if (!/^(?:[0-9]+\.)*[0-9]$/.test(farmer[11])) {
+    if (!/^(?:[0-9]+\.)*[0-9]+$/.test(farmer[11].trim())) {
       throw new Error("Cultivated area (Ha) is not valid - " + farmer[11]);
     }
 
     // if income is not a number throw error
-    if (isNaN(farmer[18])) {
+    if (isNaN(farmer[18].trim())) {
       throw new Error("Income is not valid - " + farmer[18]);
     }
 
@@ -389,46 +430,64 @@ function buildFarmer(farmer, index) {
           label: "State",
           data: "Tamil Nadu",
           type: "text",
+          elementId: "state",
         },
         firstname: {
           label: "First Name",
-          data: farmer[1].split(" ", 1)[0].toTitleCase(),
+          data:
+            farmer[1].split(" ", 1)[0].toTitleCase().trim() ||
+            farmer[1].trim().toTitleCase(),
           type: "text",
+          elementId: "firstname",
         },
         lastname: {
           label: "Last Name",
-          data: farmer[1].split(" ", 1)[1]?.toTitleCase() || "",
+          data: farmer[1].split(" ", 1)[1]?.toTitleCase().trim() || "",
           type: "text",
+          elementId: "lastname",
         },
         mobilenumber: {
           label: "Mobile Number",
-          data: farmer[4],
+          data: farmer[4].trim(),
           type: "text",
+          elementId: "mobilenumber",
         },
         yearlyincome: {
           label: "Yearly Income",
-          data: { 2022: farmer[18] },
+          data: { 2022: farmer[18].trim() },
           type: "map",
+
+          elementId: "yearlyincome",
         },
         city: {
           label: "City",
           data: "Erode",
           type: "text",
+          elementId: "city",
         },
         address: {
           label: "Area",
           data: farmer[3].trim(),
           type: "text",
+          elementId: "address",
         },
-        farmertype: {
-          label: "Farmer Type",
+        farmercategory: {
+          label: "Farmer Category",
           data: farmer[5].trim().toTitleCase(),
           type: "text",
+          elementId: "farmercategory",
         },
-        fathername: {
-          label: "Father Name",
+        fatherorhusbandname: {
+          label: "Father or Husband Name",
           data: farmer[2].trim().toTitleCase(),
           type: "text",
+          elementId: "fatherorhusbandname",
+        },
+        community: {
+          label: "Community",
+          data: farmer[6].trim(),
+          type: "text",
+          elementId: "community",
         },
       },
       farmingDetails: {
@@ -436,53 +495,56 @@ function buildFarmer(farmer, index) {
           label: "Cattle information",
           data: getCattles(farmer[16]),
           type: "map",
-        },
-        cropsCultivated: {
-          label: "Cattle information",
-          data: getCrops(farmer[12]),
-          type: "list",
+          elementId: "cattleInformation",
         },
         salesMethod: {
           data: getSales(farmer[17]),
           label: "Sales Method",
           type: "map",
+          elementId: "salesMethod",
         },
         treesCultivation: {
           data: {},
           label: "Trees Cultivation",
           type: "map",
-        },
-        community: {
-          label: "Community",
-          data: farmer[6],
-          type: "text",
+          elementId: "treesCultivation",
         },
       },
       landDetails: {
+        cropscultivated: {
+          label: "Crops cultivated",
+          data: getCrops(farmer[12]),
+          type: "list",
+          elementId: "cropscultivated",
+        },
         blocknumber: {
           label: "Block Number",
           data: BLOCK,
           type: "text",
+          elementId: "blocknumber",
         },
-        ownername: {
+        landownername: {
           label: "owner Name",
           data: getOwnerName(farmer[1], farmer[7]),
           type: "text",
+          elementId: "landownername",
         },
         surveynumber: {
           label: "Survey Number",
           data: getSurveyNumber(farmer[8]),
           type: "text",
         },
-        totalterrianarea: {
-          label: "Total Terrian Area",
+        totalextentarea: {
+          label: "Total extent area",
           data: farmer[10].trim(),
           type: "text",
+          elementId: "totalextentarea",
         },
-        terrianareaundercultivation: {
-          label: "Terrian Area under Cultivation",
+        "cultivatedarea(ha)": {
+          label: "Cultivated area(Ha)",
           data: farmer[11].trim(),
           type: "text",
+          elementId: "cultivatedarea(ha)",
         },
         sourcesofirrigation: {
           label: "Sources of Irrigation",
@@ -491,18 +553,21 @@ function buildFarmer(farmer, index) {
         },
         electricity: {
           label: "Electricity",
-          data: farmer[15].toLowerCase().trim() == "yes" ? "EB" : "",
+          data: farmer[15].toTitleCase().trim() == "yes" ? "EB" : "",
           type: "text",
+          electricity: "electricity",
         },
-        landClassification: {
+        landclassification: {
           label: "Land Classification",
           data: farmer[13].trim().toTitleCase(),
           type: "text",
+          elementId: "landclassification",
         },
         SubdivisionNumber: {
           data: getSubDivisionNumber(farmer[9]),
           label: "Sub Division Numbers",
           type: "list",
+          elementId: "SubdivisionNumber",
         },
       },
       rulebook: [
@@ -558,6 +623,10 @@ function buildFarmer(farmer, index) {
       ],
     };
     // console.log(JSON.stringify(Farmer));
+    if (!Farmer.basicDetails.firstname.data) {
+      throw new Error("Farmer name is empty");
+    }
+
     return Farmer;
   } catch (e) {
     parseErrors[index] = {
@@ -568,7 +637,7 @@ function buildFarmer(farmer, index) {
       reason: e.message,
     };
     failed++;
-    throw e;
+    // throw e;
   }
 }
 
@@ -591,6 +660,7 @@ function getSurveyNumber(surveyNumber) {
 
     return s.trim();
   });
+  return surveyNumbers;
 }
 
 function getCattles(cattle) {
@@ -612,7 +682,11 @@ function getCattles(cattle) {
 
     // if count is not a number, throw error
     if (isNaN(count)) {
-      throw new Error("Cattle count is not a number " + cattle);
+      throw new Error("Cattle information is invalid : " + cattle);
+    }
+
+    if (parseInt(count) < 0) {
+      return;
     }
 
     ret[name.trim().toTitleCase()] = parseInt(count);
@@ -695,7 +769,7 @@ function getSubDivisionNumber(subDiv) {
       // check if subDiv contains alphabets, numbers, dots
       // if yes, return the number trimmed and uppercased
       // else throw error
-      const match = i.match(/^(?:[0-9a-zA-Z]+\.)*[0-9a-zA-Z]+$/g);
+      const match = i.trim().match(/^(?:[0-9a-zA-Z]+)*[0-9a-zA-Z]+$/g);
       if (match) {
         return i.trim().toUpperCase();
       }

@@ -1,5 +1,17 @@
 # NILAM - BULK UPLOAD
 
+For converting xlsx to csv, run the following commanda.
+
+Install **in2csv** if you don't have it already.
+
+`pip install in2csv`
+
+The .xlsx files in xlsx folder will be converted to .csv files and stored in csv folder.
+
+`python xlsx_to_csv.py`
+
+**For Bulk upload**
+
 Install the dependencies
 
 `npm install`
